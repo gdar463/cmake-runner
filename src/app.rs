@@ -9,7 +9,7 @@ use ratatui::DefaultTerminal;
 
 #[derive(Default)]
 pub struct App {
-    projects: StatefulList,
+    projects: StatefulList<Project>,
     path: PathBuf,
     exit: bool,
 }

@@ -1,4 +1,4 @@
-use crate::stateful_list::StatefulList;
+use crate::{project::Project, stateful_list::StatefulList};
 
 use super::*;
 
@@ -13,7 +13,7 @@ impl ListBox {
 }
 
 impl StatefulWidget for &ListBox {
-    type State = StatefulList;
+    type State = StatefulList<Project>;
     fn render(
         self,
         area: ratatui::prelude::Rect,

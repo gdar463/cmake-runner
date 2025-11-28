@@ -1,21 +1,15 @@
-use crate::project::Project;
-
 use super::*;
 
-pub struct StatefulList {
+pub struct StatefulList<T> {
     pub state: ListState,
-    pub items: Vec<Project>,
+    pub items: Vec<T>,
 }
 
-impl Default for StatefulList {
+impl<T> Default for StatefulList<T> {
     fn default() -> Self {
         Self {
             state: ListState::default().with_selected(Some(0)),
-            items: vec![
-                Project::from("1;;;test"),
-                Project::from("2;;;wow"),
-                Project::from("3;;;just like magic"),
-            ],
+            items: Default::default(),
         }
     }
 }
