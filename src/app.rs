@@ -1,6 +1,12 @@
-use std::{fs, path::PathBuf, time::Duration};
+use std::{fs, io::Read, path::PathBuf, time::Duration};
 
-use crate::{list_box::ListBox, project::Project, stateful_list::StatefulList};
+use crate::{
+    action::Action,
+    list_box::{ListBox, state::ListBoxState},
+    project::Project,
+    reader::Reader,
+    stateful_list::StatefulList,
+};
 
 use super::*;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -9,14 +15,29 @@ use ratatui::DefaultTerminal;
 
 #[derive(Default)]
 pub struct App {
-    projects: StatefulList<Project>,
+    projects: ListBoxState<Project>,
+    actions: ListBoxState<Action>,
     path: PathBuf,
+    reader: Reader,
     exit: bool,
 }
 
 impl App {
-    pub fn run(&mut self, terminal: &mut DefaultTerminal, path: PathBuf) -> Result<()> {
-        self.path = path;
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            actions: ListBoxState {
+                list: StatefulList {
+                    items: vec![Action::Run, Action::Build, Action::Debug],
+                    ..Default::default()
+                },
+                active: false,
+            },
+            path,
+            ..Default::default()
+        }
+    }
+
+    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         self.refresh_list()?;
         while !self.exit {
             terminal.draw(|frame| self.draw(frame))?;
@@ -47,8 +68,24 @@ impl App {
             KeyCode::Char('r') if key_event.modifiers == KeyModifiers::SHIFT => {
                 self.refresh_list()?
             }
-            KeyCode::Up => self.projects.state.select_previous(),
-            KeyCode::Down => self.projects.state.select_next(),
+            KeyCode::Char('a') => {
+                self.projects.active = !self.projects.active;
+                self.actions.active = !self.actions.active
+            }
+            KeyCode::Up if self.projects.active => self.projects.list.state.select_previous(),
+            KeyCode::Up if self.actions.active => self.actions.list.state.select_previous(),
+            KeyCode::Down if self.projects.active => self.projects.list.state.select_next(),
+            KeyCode::Down if self.actions.active => self.actions.list.state.select_next(),
+            KeyCode::Enter if self.actions.active => {
+                self.reader = Reader::Present(
+                    self.actions.list.items[self.actions.list.state.selected().unwrap_or_default()]
+                        .run(
+                            &self.projects.list.items
+                                [self.projects.list.state.selected().unwrap_or_default()],
+                            self.path.parent().unwrap(),
+                        )?,
+                );
+            }
             _ => {}
         }
         Ok(())
@@ -94,7 +131,7 @@ impl App {
                 }
             }
         }
-        self.projects.items = projects;
+        self.projects.list.items = projects;
         Ok(())
     }
 }
@@ -105,25 +142,38 @@ impl Widget for &mut App {
             x: area.x + 1,
             y: area.y,
             width: area.width / 4,
-            height: area.height - 1,
+            height: area.height / 2,
         };
-        ListBox::new(" Projects ").render(projects_area, buf, &mut self.projects);
+        ListBox::<Project>::new(" Projects ").render(projects_area, buf, &mut self.projects);
 
-        let desc_area = Rect {
+        let actions_area = Rect {
+            x: area.x + 1,
+            y: projects_area.y + projects_area.height,
+            width: area.width / 4,
+            height: area.height / 2,
+        };
+        ListBox::<Action>::new(" Actions ").render(actions_area, buf, &mut self.actions);
+
+        let out_area = Rect {
             x: projects_area.x + projects_area.width,
             y: area.y,
             width: area.width / 4 * 3 - 1,
             height: area.height - 1,
         };
-        let block = Block::bordered().title(" Description ");
-        let value = &self
-            .projects
-            .items
-            .get(self.projects.state.selected().unwrap_or(0))
-            .unwrap()
-            .file_name;
-        Paragraph::new(format!(" {value}"))
-            .block(block)
-            .render(desc_area, buf);
+        let block = Block::bordered().title(" Output ");
+        let value = match &self.reader {
+            Reader::Present(_r) => {
+                let mut lines = String::new();
+                let _ = self.reader.get_reader().unwrap().read_to_string(&mut lines);
+                let lines = lines
+                    .lines()
+                    .fold(String::new(), |s, l| s + " " + &l + "\n");
+                self.reader = Reader::Done(lines.clone());
+                lines
+            }
+            Reader::Done(l) => l.to_string(),
+            Reader::None => " <empty>".to_string(),
+        };
+        Paragraph::new(value).block(block).render(out_area, buf);
     }
 }
