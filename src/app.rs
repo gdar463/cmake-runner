@@ -10,15 +10,17 @@ use crate::{
 use super::*;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use eyre::Result;
-use ratatui::DefaultTerminal;
-use tokio::sync::{Mutex, mpsc};
+use ratatui::{DefaultTerminal, text::Text};
+use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
 pub struct App {
     projects: ListBoxState<Project>,
     actions: ListBoxState<Action>,
     path: PathBuf,
-    out_channel: Mutex<(mpsc::Sender<String>, mpsc::Receiver<String>)>,
+    out_tx: mpsc::Sender<Result<Text<'static>>>,
+    out_rx: mpsc::Receiver<Result<Text<'static>>>,
+    output: Vec<Text<'static>>,
     exit: bool,
 }
 
@@ -26,6 +28,7 @@ impl App {
     const FRAMES_PER_SECOND: f32 = 60.0;
 
     pub fn new(path: PathBuf) -> Self {
+        let (out_tx, out_rx) = mpsc::channel(50);
         Self {
             actions: ListBoxState {
                 list: StatefulList {
@@ -36,7 +39,9 @@ impl App {
             },
             projects: Default::default(),
             path,
-            out_channel: Mutex::new(mpsc::channel(50)),
+            out_tx,
+            out_rx,
+            output: Vec::new(),
             exit: false,
         }
     }
@@ -52,6 +57,12 @@ impl App {
             tokio::select! {
                 _ = interval.tick() => {terminal.draw(|frame| self.draw(frame))?;},
                 Some(Ok(event)) = events.next() => self.handle_events(&event)?,
+                Some(line) = self.out_rx.recv() => {
+                    match line {
+                        Ok(line) => self.output.push(line),
+                        Err(e) => self.output.push(Text::raw(e.to_string())),
+                    }
+                }
             };
         }
         Ok(())
@@ -82,7 +93,20 @@ impl App {
             KeyCode::Up if self.actions.active => self.actions.prev(),
             KeyCode::Down if self.projects.active => self.projects.next(),
             KeyCode::Down if self.actions.active => self.actions.next(),
-            KeyCode::Enter if self.actions.active => {}
+            KeyCode::Enter if self.actions.active => {
+                if let Some(action) = self.actions.get_selected().cloned() {
+                    if let Some(project) = self.projects.get_selected().cloned() {
+                        self.output.clear();
+                        let out_tx = self.out_tx.clone();
+                        let path = self.path.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = action.run(&out_tx, &project, &path).await {
+                                out_tx.send(Err(e)).await.ok();
+                            }
+                        });
+                    }
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -119,7 +143,17 @@ impl Widget for &mut App {
             height: area.height - 1,
         };
         let block = Block::bordered().title(" Output ");
-        let value = " <empty>".to_string();
-        Paragraph::new(value).block(block).render(out_area, buf);
+        let lines: Vec<_> = self
+            .output
+            .iter()
+            .flat_map(|text| {
+                text.lines
+                    .clone()
+                    .into_iter()
+                    .map(|line| line.patch_style(text.style))
+            })
+            .collect();
+        let paragraph = Paragraph::new(lines).block(block);
+        paragraph.render(out_area, buf);
     }
 }

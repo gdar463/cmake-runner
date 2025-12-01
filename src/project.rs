@@ -1,4 +1,4 @@
-#[derive(Default)]
+#[derive(Default, Clone, Debug)]
 pub struct Project {
     pub key: String,
     pub file_name: String,

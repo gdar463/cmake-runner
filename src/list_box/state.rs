@@ -6,16 +6,16 @@ pub struct ListBoxState<T> {
 }
 
 impl<T> ListBoxState<T> {
-    pub fn get_selected(&self) -> &T {
-        &self.list.items[self.list.state.selected().unwrap_or_default()]
+    pub fn get_selected(&self) -> Option<&T> {
+        self.list.get_selected()
     }
 
     pub fn prev(&mut self) {
-        self.list.state.select_previous();
+        self.list.prev();
     }
 
     pub fn next(&mut self) {
-        self.list.state.select_next();
+        self.list.next();
     }
 }
 
