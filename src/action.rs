@@ -8,7 +8,7 @@ use tokio::{
     sync::mpsc,
 };
 
-use crate::project::Project;
+use crate::{list_box::ListItemProvider, project::Project};
 use eyre::Result;
 
 #[derive(Default, PartialEq, Eq, Clone)]
@@ -17,6 +17,12 @@ pub enum Action {
     Run,
     Build,
     Debug,
+}
+
+impl ListItemProvider for Action {
+    fn as_str(&self) -> &str {
+        self.to_str()
+    }
 }
 
 impl Action {
@@ -35,19 +41,9 @@ impl Action {
         dir: &Path,
     ) -> Result<()> {
         let path = dir.parent().unwrap().to_str().unwrap();
-        let target = &project.key;
         match self {
             Action::Run => self.build_and_run(out, path, project).await,
-            Action::Build => {
-                self.spawn_command(
-                    out,
-                    "cmake",
-                    &["--build", "build", "-t", target],
-                    path,
-                    "Build",
-                )
-                .await
-            }
+            Action::Build => self.build(out, path, project).await,
             Action::Debug => self.build_and_run(out, path, project).await,
         }
     }
@@ -58,15 +54,7 @@ impl Action {
         path: &str,
         project: &Project,
     ) -> Result<()> {
-        let result = self
-            .spawn_command(
-                out,
-                "cmake",
-                &["--build", "build", "-t", &project.key],
-                path,
-                "Build",
-            )
-            .await;
+        let result = self.build(out, path, project).await;
         match result {
             Err(..) => return Ok(()),
             _ => {}
@@ -77,6 +65,22 @@ impl Action {
             &[],
             path,
             "Run",
+        )
+        .await
+    }
+
+    async fn build(
+        &self,
+        out: &mpsc::Sender<Result<Text<'static>>>,
+        path: &str,
+        project: &Project,
+    ) -> Result<()> {
+        self.spawn_command(
+            out,
+            "cmake",
+            &["--build", "build", "-t", &project.target],
+            path,
+            "Build",
         )
         .await
     }
@@ -130,7 +134,7 @@ impl Action {
                 match stderr_reader.read(&mut buffer).await {
                     Ok(0) => break,
                     Ok(n) => {
-                        let text = (&buffer[..n]).into_text().unwrap();
+                        let text = (&buffer[..n]).into_text().unwrap().light_magenta();
                         if out_clone.send(Ok(text)).await.is_err() {
                             break;
                         }
@@ -156,7 +160,7 @@ impl Action {
             out.send(Ok(Text::raw(format!("=== {action} failed")).light_red()))
                 .await?;
             out.send(Ok(Text::raw("\n"))).await?;
-            Err(eyre::ErrReport::msg(1))
+            Err(eyre::eyre!(""))
         }
     }
 }

@@ -1,7 +1,15 @@
+use crate::list_box::ListItemProvider;
+
 #[derive(Default, Clone, Debug)]
 pub struct Project {
-    pub key: String,
+    pub target: String,
     pub file_name: String,
+}
+
+impl ListItemProvider for Project {
+    fn as_str(&self) -> &str {
+        &self.target
+    }
 }
 
 impl From<&str> for Project {
@@ -10,7 +18,7 @@ impl From<&str> for Project {
         let key = split.next().unwrap().to_string();
         let value = split.next().unwrap().to_string();
         Project {
-            key,
+            target: key,
             file_name: value,
         }
     }

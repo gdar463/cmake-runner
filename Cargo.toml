@@ -6,9 +6,7 @@ edition = "2024"
 [dependencies]
 ansi-to-tui = "7.0.0"
 crossterm = { version = "0.29.0", features = ["event-stream"] }
-duct = "1.1.1"
 eyre = "0.6.12"
 ratatui = "0.29.0"
-tokio = { version = "1.48.0", features = ["full"] }
-tokio-macros = "2.6.0"
-tokio-stream = { version = "0.1.17", features = ["full"] }
+tokio = { version = "1.48.0", features = ["sync", "time", "io-util", "process", "macros", "rt"] }
+tokio-stream = { version = "0.1.17" }

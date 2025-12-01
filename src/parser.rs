@@ -1,24 +1,28 @@
 use eyre::Result;
-use std::{fs, path::PathBuf};
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use crate::project::Project;
 
 pub fn refresh_list(path: &PathBuf) -> Result<Vec<Project>> {
     let file = fs::read_to_string(path)?;
-    let mut projects = Vec::new();
+    let mut projects: BTreeMap<String, Project> = BTreeMap::new();
     for line in file.lines() {
         if line.starts_with("add_executable") {
-            projects.push(Project {
-                key: line
-                    .split("(")
-                    .nth(1)
-                    .unwrap()
-                    .split(" ")
-                    .nth(0)
-                    .unwrap()
-                    .to_string(),
-                file_name: "".to_string(),
-            })
+            let target = line
+                .split("(")
+                .nth(1)
+                .unwrap()
+                .split(" ")
+                .nth(0)
+                .unwrap()
+                .to_string();
+            projects.insert(
+                target.clone(),
+                Project {
+                    target,
+                    file_name: "".to_string(),
+                },
+            );
         } else if line.starts_with("set_target_properties") {
             let target = line
                 .split("(")
@@ -28,10 +32,7 @@ pub fn refresh_list(path: &PathBuf) -> Result<Vec<Project>> {
                 .nth(0)
                 .unwrap()
                 .to_string();
-            if let Some(element) = projects
-                .iter_mut()
-                .find(|item| if item.key == target { true } else { false })
-            {
+            if let Some(element) = projects.get_mut(&target) {
                 element.file_name = line
                     .split("\"")
                     .nth(1)
@@ -43,5 +44,5 @@ pub fn refresh_list(path: &PathBuf) -> Result<Vec<Project>> {
             }
         }
     }
-    Ok(projects)
+    Ok(projects.into_values().collect())
 }
