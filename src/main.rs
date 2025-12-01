@@ -3,7 +3,8 @@ use std::path::Path;
 use cmake_runner::app::App;
 use eyre::Result;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let path = &std::env::args().nth(1).unwrap_or(".".to_string());
     let Ok(path) = Path::new(path).canonicalize() else {
         eprintln!("Enter a valid directory containing a CMakeLists.txt file.");
@@ -16,7 +17,7 @@ fn main() -> Result<()> {
     }
     let mut terminal = ratatui::init();
     terminal.clear()?;
-    let result = App::new(path).run(&mut terminal);
+    let result = App::new(path).run(&mut terminal).await;
     ratatui::restore();
     result
 }

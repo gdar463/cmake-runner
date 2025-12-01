@@ -1,6 +1,10 @@
-use std::{io::BufReader, path::Path};
+use std::{path::Path, process::Stdio};
 
-use duct::{ReaderHandle, cmd};
+use tokio::{
+    io::{AsyncBufReadExt, BufReader, Lines},
+    process::{ChildStdout, Command},
+    sync::mpsc,
+};
 
 use crate::project::Project;
 use eyre::Result;
@@ -13,6 +17,8 @@ pub enum Action {
     Debug,
 }
 
+pub type LinesChild = Lines<BufReader<ChildStdout>>;
+
 impl Action {
     pub fn to_str(&self) -> &'static str {
         match self {
@@ -22,32 +28,45 @@ impl Action {
         }
     }
 
-    pub fn run(&self, project: &Project, dir: &Path) -> Result<BufReader<ReaderHandle>> {
+    pub fn run(
+        &self,
+        out: &mpsc::Sender<Option<String>>,
+        project: &Project,
+        dir: &Path,
+    ) -> Result<()> {
         match self {
             Action::Run => {
-                let path = dir.to_string_lossy();
+                let path = dir.to_str().unwrap();
                 let target = &project.key;
-                self.build(&path.to_string(), target)
+                self.build(out, &path, target)
             }
             Action::Build => {
-                let path = dir.to_string_lossy();
+                let path = dir.to_str().unwrap();
                 let target = &project.key;
-                self.build(&path.to_string(), target)
+                self.build(out, &path, target)
             }
             Action::Debug => {
-                let path = dir.to_string_lossy();
+                let path = dir.to_str().unwrap();
                 let target = &project.key;
-                self.build(&path.to_string(), target)
+                self.build(out, &path, target)
             }
         }
     }
 
-    fn build(&self, path: &String, target: &String) -> Result<BufReader<ReaderHandle>> {
-        Ok(BufReader::new(
-            cmd!("cmake", "--build", "build", "-t", target)
-                .dir(path)
-                .stderr_to_stdout()
-                .reader()?,
-        ))
+    fn build(&self, out: &mpsc::Sender<Option<String>>, path: &str, target: &String) -> Result<()> {
+        let mut child = Command::new("cmake")
+            .args(&["--build", "build", "-t", target])
+            .current_dir(path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let stdout = child.stdout.take().expect("stdout not piped");
+        let mut reader = BufReader::new(stdout).lines();
+
+        tokio::spawn(async move {
+            out.send(reader.next_line().await.unwrap());
+        });
+
+        Ok(())
     }
 }

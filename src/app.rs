@@ -1,28 +1,30 @@
-use std::{fs, io::Read, path::PathBuf, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
 use crate::{
     action::Action,
     list_box::{ListBox, state::ListBoxState},
     project::Project,
-    reader::Reader,
     stateful_list::StatefulList,
 };
 
 use super::*;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use eyre::Result;
 use ratatui::DefaultTerminal;
+use tokio::sync::{Mutex, mpsc};
+use tokio_stream::StreamExt;
 
-#[derive(Default)]
 pub struct App {
     projects: ListBoxState<Project>,
     actions: ListBoxState<Action>,
     path: PathBuf,
-    reader: Reader,
+    out_channel: Mutex<(mpsc::Sender<String>, mpsc::Receiver<String>)>,
     exit: bool,
 }
 
 impl App {
+    const FRAMES_PER_SECOND: f32 = 60.0;
+
     pub fn new(path: PathBuf) -> Self {
         Self {
             actions: ListBoxState {
@@ -32,16 +34,25 @@ impl App {
                 },
                 active: false,
             },
+            projects: Default::default(),
             path,
-            ..Default::default()
+            out_channel: Mutex::new(mpsc::channel(50)),
+            exit: false,
         }
     }
 
-    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+    pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         self.refresh_list()?;
+
+        let period = Duration::from_secs_f32(1.0 / Self::FRAMES_PER_SECOND);
+        let mut interval = tokio::time::interval(period);
+        let mut events = EventStream::new();
+
         while !self.exit {
-            terminal.draw(|frame| self.draw(frame))?;
-            self.handle_events()?;
+            tokio::select! {
+                _ = interval.tick() => {terminal.draw(|frame| self.draw(frame))?;},
+                Some(Ok(event)) = events.next() => self.handle_events(&event)?,
+            };
         }
         Ok(())
     }
@@ -50,14 +61,9 @@ impl App {
         frame.render_widget(self, frame.area());
     }
 
-    fn handle_events(&mut self) -> Result<()> {
-        if event::poll(Duration::from_secs(0)).unwrap() == true {
-            match event::read()? {
-                Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                    self.handle_key_event(key_event)?
-                }
-                _ => {}
-            }
+    fn handle_events(&mut self, event: &Event) -> Result<()> {
+        if let Some(key_event) = event.as_key_press_event() {
+            self.handle_key_event(key_event)?
         }
         Ok(())
     }
@@ -72,66 +78,18 @@ impl App {
                 self.projects.active = !self.projects.active;
                 self.actions.active = !self.actions.active
             }
-            KeyCode::Up if self.projects.active => self.projects.list.state.select_previous(),
-            KeyCode::Up if self.actions.active => self.actions.list.state.select_previous(),
-            KeyCode::Down if self.projects.active => self.projects.list.state.select_next(),
-            KeyCode::Down if self.actions.active => self.actions.list.state.select_next(),
-            KeyCode::Enter if self.actions.active => {
-                self.reader = Reader::Present(
-                    self.actions.list.items[self.actions.list.state.selected().unwrap_or_default()]
-                        .run(
-                            &self.projects.list.items
-                                [self.projects.list.state.selected().unwrap_or_default()],
-                            self.path.parent().unwrap(),
-                        )?,
-                );
-            }
+            KeyCode::Up if self.projects.active => self.projects.prev(),
+            KeyCode::Up if self.actions.active => self.actions.prev(),
+            KeyCode::Down if self.projects.active => self.projects.next(),
+            KeyCode::Down if self.actions.active => self.actions.next(),
+            KeyCode::Enter if self.actions.active => {}
             _ => {}
         }
         Ok(())
     }
 
     fn refresh_list(&mut self) -> Result<()> {
-        let file = fs::read_to_string(&self.path)?;
-        let mut projects = Vec::new();
-        for line in file.lines() {
-            if line.starts_with("add_executable") {
-                projects.push(Project {
-                    key: line
-                        .split("(")
-                        .nth(1)
-                        .unwrap()
-                        .split(" ")
-                        .nth(0)
-                        .unwrap()
-                        .to_string(),
-                    file_name: "".to_string(),
-                })
-            } else if line.starts_with("set_target_properties") {
-                let target = line
-                    .split("(")
-                    .nth(1)
-                    .unwrap()
-                    .split(" ")
-                    .nth(0)
-                    .unwrap()
-                    .to_string();
-                if let Some(element) = projects
-                    .iter_mut()
-                    .find(|item| if item.key == target { true } else { false })
-                {
-                    element.file_name = line
-                        .split("\"")
-                        .nth(1)
-                        .unwrap()
-                        .split("\"")
-                        .nth(0)
-                        .unwrap()
-                        .to_string();
-                }
-            }
-        }
-        self.projects.list.items = projects;
+        self.projects.list.items = parser::refresh_list(&self.path)?;
         Ok(())
     }
 }
@@ -161,19 +119,7 @@ impl Widget for &mut App {
             height: area.height - 1,
         };
         let block = Block::bordered().title(" Output ");
-        let value = match &self.reader {
-            Reader::Present(_r) => {
-                let mut lines = String::new();
-                let _ = self.reader.get_reader().unwrap().read_to_string(&mut lines);
-                let lines = lines
-                    .lines()
-                    .fold(String::new(), |s, l| s + " " + &l + "\n");
-                self.reader = Reader::Done(lines.clone());
-                lines
-            }
-            Reader::Done(l) => l.to_string(),
-            Reader::None => " <empty>".to_string(),
-        };
+        let value = " <empty>".to_string();
         Paragraph::new(value).block(block).render(out_area, buf);
     }
 }
