@@ -3,6 +3,11 @@ name = "cmake-runner"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = "z"
+
 [dependencies]
 ansi-to-tui = "7.0.0"
 crossterm = { version = "0.29.0", features = ["event-stream"] }
