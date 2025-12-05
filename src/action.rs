@@ -45,8 +45,31 @@ impl Action {
         match self {
             Action::Run => self.build_and_run(out, Some(in_rx), path, project).await,
             Action::Build => self.build(out, path, project).await,
-            Action::Debug => self.build_and_run(out, Some(in_rx), path, project).await,
+            Action::Debug => self.build_and_debug(out, Some(in_rx), path, project).await,
         }
+    }
+
+    async fn build_and_debug(
+        &self,
+        out: &mpsc::Sender<Result<Text<'static>>>,
+        mut in_rx: Option<mpsc::Receiver<Result<String>>>,
+        path: &str,
+        project: &Project,
+    ) -> Result<()> {
+        let result = self.build(out, path, project).await;
+        match result {
+            Err(..) => return Ok(()),
+            _ => {}
+        };
+        self.spawn_command(
+            out,
+            in_rx.take(),
+            &format!("build/{0}", project.file_name),
+            &[],
+            path,
+            "Run",
+        )
+        .await
     }
 
     async fn build_and_run(
@@ -64,8 +87,8 @@ impl Action {
         self.spawn_command(
             out,
             in_rx.take(),
-            &format!("build/{0}", project.file_name),
-            &[],
+            "lldb",
+            &[&format!("build/{0}", project.file_name)],
             path,
             "Run",
         )
