@@ -64,8 +64,8 @@ impl Action {
         self.spawn_command(
             out,
             in_rx.take(),
-            &format!("build/{0}", project.file_name),
-            &[],
+            "lldb",
+            &[&format!("build/{0}", project.file_name)],
             path,
             "Run",
         )
@@ -87,8 +87,8 @@ impl Action {
         self.spawn_command(
             out,
             in_rx.take(),
-            "lldb",
-            &[&format!("build/{0}", project.file_name)],
+            &format!("build/{0}", project.file_name),
+            &[],
             path,
             "Run",
         )
