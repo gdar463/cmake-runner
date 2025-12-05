@@ -15,6 +15,7 @@ use ratatui::{
     DefaultTerminal,
     text::{Span, Text},
 };
+use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
 #[derive(Default)]
@@ -24,8 +25,10 @@ pub struct App {
     path: PathBuf,
     output: Vec<Text<'static>>,
     io: AppIo,
+    in_tx: Option<mpsc::Sender<Result<String>>>,
     offset: u16,
     exit: bool,
+    input: bool,
 }
 
 impl App {
@@ -41,6 +44,8 @@ impl App {
                 active: false,
             },
             path,
+            input: false,
+            in_tx: None,
             ..Default::default()
         }
     }
@@ -73,14 +78,51 @@ impl App {
 
     fn handle_events(&mut self, event: &Event) -> Result<()> {
         if let Some(key_event) = event.as_key_press_event() {
-            self.handle_key_event(key_event)?
+            self.handle_key_event(key_event.to_owned())?
         }
         Ok(())
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<()> {
+        if self.input {
+            if key_event.code == KeyCode::Char('i') && key_event.modifiers == KeyModifiers::ALT {
+                self.input = false;
+                self.in_tx = None;
+            } else if let Some(in_tx) = &self.in_tx {
+                if key_event.modifiers == KeyModifiers::CONTROL {
+                    match key_event.code {
+                        KeyCode::Char('j') => {
+                            self.offset += 1;
+                        }
+                        KeyCode::Char('k') => {
+                            self.offset = self.offset.saturating_sub(1);
+                        }
+                        _ => {}
+                    }
+                    return Ok(());
+                }
+
+                let mut buf = [0; 4];
+                let str_buf = match key_event.code {
+                    KeyCode::Char(c) => c.encode_utf8(&mut buf).to_string(),
+                    KeyCode::Enter => "\n".to_string(),
+                    _ => "".to_string(),
+                };
+
+                if !str_buf.is_empty() {
+                    if let Some(l) = self.output.last_mut() {
+                        l.push_span(format!("{str_buf}"));
+                    }
+                    in_tx.try_send(Ok(str_buf)).ok();
+                }
+            }
+            return Ok(());
+        }
+
         match key_event.code {
-            KeyCode::Char('c') if key_event.modifiers == KeyModifiers::CONTROL => self.exit = true,
+            KeyCode::Char('c') if key_event.modifiers == KeyModifiers::CONTROL => {
+                self.exit = true;
+            }
             KeyCode::Char('r') if key_event.modifiers == KeyModifiers::SHIFT => {
                 self.refresh_list()?
             }
@@ -98,17 +140,28 @@ impl App {
                     self.projects.get_selected().cloned(),
                 ) {
                     self.output.clear();
+
                     let out_tx = self.io.out_tx.clone();
+                    let (command_in_tx, command_in_rx) = mpsc::channel(50);
+                    self.in_tx = Some(command_in_tx);
+
                     let path = self.path.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = action.run(&out_tx, &project, &path).await {
+                        if let Err(e) = action.run(&out_tx, command_in_rx, &project, &path).await {
                             out_tx.send(Err(e)).await.ok();
                         }
                     });
                 }
             }
-            KeyCode::Char('j') => self.offset += 1,
-            KeyCode::Char('k') => self.offset = self.offset.saturating_sub(1),
+            KeyCode::Char('j') => {
+                self.offset += 1;
+            }
+            KeyCode::Char('k') => {
+                self.offset = self.offset.saturating_sub(1);
+            }
+            KeyCode::Char('i') if key_event.modifiers == KeyModifiers::ALT => {
+                self.input = true;
+            }
             _ => {}
         }
         Ok(())
@@ -144,9 +197,15 @@ impl Widget for &mut App {
             width: area.width / 4 * 3 - 1,
             height: area.height - 1,
         };
-        let block = Block::bordered()
-            .border_style(Style::new().gray())
-            .title(" Output ");
+        let block = if self.input {
+            Block::bordered()
+                .border_style(Style::new().light_yellow())
+                .title(" Output ")
+        } else {
+            Block::bordered()
+                .border_style(Style::new().gray())
+                .title(" Output ")
+        };
         let lines: Vec<_> = self
             .output
             .iter()

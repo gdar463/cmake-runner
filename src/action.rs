@@ -3,7 +3,7 @@ use std::{path::Path, process::Stdio};
 use ansi_to_tui::IntoText;
 use ratatui::{style::Stylize, text::Text};
 use tokio::{
-    io::{AsyncReadExt, BufReader},
+    io::{AsyncReadExt, AsyncWriteExt, BufReader},
     process::Command,
     sync::mpsc,
 };
@@ -37,20 +37,22 @@ impl Action {
     pub async fn run(
         &self,
         out: &mpsc::Sender<Result<Text<'static>>>,
+        in_rx: mpsc::Receiver<Result<String>>,
         project: &Project,
         dir: &Path,
     ) -> Result<()> {
         let path = dir.parent().unwrap().to_str().unwrap();
         match self {
-            Action::Run => self.build_and_run(out, path, project).await,
+            Action::Run => self.build_and_run(out, Some(in_rx), path, project).await,
             Action::Build => self.build(out, path, project).await,
-            Action::Debug => self.build_and_run(out, path, project).await,
+            Action::Debug => self.build_and_run(out, Some(in_rx), path, project).await,
         }
     }
 
     async fn build_and_run(
         &self,
         out: &mpsc::Sender<Result<Text<'static>>>,
+        mut in_rx: Option<mpsc::Receiver<Result<String>>>,
         path: &str,
         project: &Project,
     ) -> Result<()> {
@@ -61,6 +63,7 @@ impl Action {
         };
         self.spawn_command(
             out,
+            in_rx.take(),
             &format!("build/{0}", project.file_name),
             &[],
             path,
@@ -77,6 +80,7 @@ impl Action {
     ) -> Result<()> {
         self.spawn_command(
             out,
+            None,
             "cmake",
             &["--build", "build", "-t", &project.target],
             path,
@@ -88,6 +92,7 @@ impl Action {
     async fn spawn_command(
         &self,
         out: &mpsc::Sender<Result<Text<'static>>>,
+        mut in_rx: Option<mpsc::Receiver<Result<String>>>,
         command: &str,
         args: &[&str],
         path: &str,
@@ -98,7 +103,19 @@ impl Action {
             .current_dir(path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .stdin(Stdio::piped())
             .spawn()?;
+
+        if let Some(mut in_rx) = in_rx.take() {
+            let mut stdin = child.stdin.take().expect("stdin not piped");
+            tokio::spawn(async move {
+                while let Some(Ok(input)) = in_rx.recv().await {
+                    if stdin.write_all(input.as_bytes()).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
 
         let stdout = child.stdout.take().expect("stdout not piped");
         let stderr = child.stderr.take().expect("stderr not piped");
