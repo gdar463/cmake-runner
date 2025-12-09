@@ -126,6 +126,9 @@ impl App {
             KeyCode::Char('r') if key_event.modifiers == KeyModifiers::SHIFT => {
                 self.refresh_list()?
             }
+            KeyCode::Char('b') if key_event.modifiers == KeyModifiers::CONTROL => {
+                self.cmake_configure()?;
+            }
             KeyCode::Char('a') => {
                 self.projects.active = !self.projects.active;
                 self.actions.active = !self.actions.active
@@ -169,6 +172,27 @@ impl App {
 
     fn refresh_list(&mut self) -> Result<()> {
         self.projects.list.items = parser::refresh_list(&self.path)?;
+        Ok(())
+    }
+
+    fn cmake_configure(&mut self) -> Result<()> {
+        self.output.clear();
+        let out_tx = self.io.out_tx.clone();
+        let path = self.path.clone();
+        tokio::spawn(async move {
+            if let Err(e) = utils::spawn_command(
+                &out_tx,
+                None,
+                "cmake",
+                &["--build", "build"],
+                path.parent().unwrap().to_str().unwrap(),
+                "Build",
+            )
+            .await
+            {
+                out_tx.send(Err(e)).await.ok();
+            }
+        });
         Ok(())
     }
 }

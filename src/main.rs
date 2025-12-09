@@ -5,12 +5,10 @@ use eyre::Result;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    let path = std::env::args()
-        .nth(1)
-        .map(|p| Path::new(&p).canonicalize())
-        .transpose()
+    let dir = std::env::args().nth(1).unwrap_or(".".to_string());
+    let path = Path::new(&dir)
+        .canonicalize()
         .ok()
-        .flatten()
         .map(|p| p.join("CMakeLists.txt"))
         .filter(|p| p.exists())
         .ok_or_else(|| eyre::eyre!("Enter a valid directory containing a CMakeLists.txt file."))?;
